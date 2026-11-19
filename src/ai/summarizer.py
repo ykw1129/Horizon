@@ -100,10 +100,12 @@ LABELS = {
 
 EMPTY_PROFILE_MESSAGES = {
     "zh": {
+        "github-trending": "今日暂无可展示的 GitHub 热门项目，请查看数据源运行日志。",
         "x-hotspots": "今日暂无可展示的 X 热点内容。",
         "finance-news": "今日暂无可展示的财经新闻。",
     },
     "en": {
+        "github-trending": "No GitHub trending projects are available; check the source logs.",
         "x-hotspots": "No X posts are available for this digest.",
         "finance-news": "No finance stories are available for this digest.",
     },
@@ -170,7 +172,7 @@ class DailySummarizer:
         for item in items:
             grouped_items.setdefault(self._profile_id(item), []).append(item)
 
-        for profile_id in ("x-hotspots", "finance-news"):
+        for profile_id in ("github-trending", "x-hotspots", "finance-news"):
             if profile_id in self.profile_order and profile_id not in grouped_items:
                 grouped_items[profile_id] = []
 

@@ -130,19 +130,22 @@ def _layout_email_blocks(markup: str) -> str:
     def flush_cards():
         if not cards:
             return
-        output.append('<div style="font-size:0;text-align:left">')
-        for card in cards:
-            output.append(
-                '<div style="display:inline-block;vertical-align:top;width:100%;max-width:400px;'
-                'font-size:15px;text-align:left"><table role="presentation" width="100%" '
-                'cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 8px 16px">'
-                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-                'style="background:#ffffff;border:1px solid #dfe5e7;border-top:3px solid #118579">'
-                '<tr><td style="padding:20px;overflow-wrap:anywhere;word-break:break-word">'
-                + _apply_email_inline_styles(card)
-                + '</td></tr></table></td></tr></table></div>'
-            )
-        output.append('</div>')
+        output.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;table-layout:fixed">')
+        for index in range(0, len(cards), 2):
+            output.append('<tr>')
+            for card in cards[index:index + 2]:
+                output.append(
+                    '<td class="digest-column" width="50%" valign="top" style="width:50%;padding:0 8px 16px;vertical-align:top">'
+                    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                    'style="width:100%;background:#ffffff;border:1px solid #dfe5e7;border-top:3px solid #118579">'
+                    '<tr><td style="padding:20px;overflow-wrap:anywhere;word-break:break-word">'
+                    + _apply_email_inline_styles(card)
+                    + '</td></tr></table></td>'
+                )
+            if index + 1 == len(cards):
+                output.append('<td class="digest-empty" width="50%" style="width:50%"></td>')
+            output.append('</tr>')
+        output.append('</table>')
         cards.clear()
 
     for part in parts:
@@ -170,7 +173,7 @@ def _render_email_document(
     unsubscribe_keyword: str,
     language: str = "en",
 ) -> str:
-    """Wrap rendered summary content in a single-column, table-based email."""
+    """Wrap the summary in a responsive, table-based email."""
     sender = html.escape(sender_name, quote=True)
     unsubscribe = html.escape(unsubscribe_keyword, quote=True)
     is_chinese = language == "zh"
@@ -183,7 +186,7 @@ def _render_email_document(
     )
     return f"""<!DOCTYPE html>
 <html lang="{html_language}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>@media only screen and (max-width:600px){{.digest-column{{display:block!important;width:100%!important;box-sizing:border-box!important}}.digest-empty{{display:none!important}}}}</style></head>
 <body style="margin:0;padding:0;background:#f1f4f7;color:#26354a;font-family:Arial,'Microsoft YaHei',sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f4f7" style="width:100%;background:#f1f4f7">
 <tr><td align="center" style="padding:24px 12px">
