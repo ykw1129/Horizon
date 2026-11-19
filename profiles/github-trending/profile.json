@@ -1,0 +1,20 @@
+{
+  "id": "github-trending",
+  "name": "GitHub Trending Projects",
+  "display_names": {
+    "zh": "GitHub 热门项目"
+  },
+  "match": "match.md",
+  "analysis": "analysis.md",
+  "enrichment": {
+    "prompt": "enrichment.md",
+    "blocks": [
+      {
+        "id": "summary",
+        "type": "section",
+        "tools": [],
+        "primary": true
+      }
+    ]
+  }
+}

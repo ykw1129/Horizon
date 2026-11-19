@@ -165,6 +165,12 @@ class DailySummarizer:
         groups = []
         global_index = 1
         for profile_id, profile_items in ordered_groups:
+            if profile_id == "github-trending":
+                profile_items = sorted(
+                    profile_items,
+                    key=lambda item: int(item.metadata.get("stars_gained") or 0),
+                    reverse=True,
+                )
             view_items = []
             for index, item in enumerate(profile_items, start=1):
                 artifact = (
