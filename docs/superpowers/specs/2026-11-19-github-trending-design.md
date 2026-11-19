@@ -14,7 +14,7 @@
 
 ## 方案
 
-启用 Horizon 已有的 OSS Insight 趋势源。它从公开 API 获取 GitHub WatchEvents 的新增 Star 排名，不需要 API Key。请求使用 `past_24_hours` 和 `All` 语言，合并并按新增 Star 排序后最多保留 20 项。为满足“不设最低涨星数”，`min_stars` 设为 0。
+启用 Horizon 已有的 OSS Insight 趋势源。它优先从公开 API 获取 GitHub WatchEvents 的新增 Star 排名，不需要 API Key。请求使用 `past_24_hours` 和 `All` 语言，合并并按新增 Star 排序后最多保留 20 项。为满足“不设最低涨星数”，`min_stars` 设为 0。如果 API 明确返回 `github_event_derived_ranking` 不可用，抓取器改用 GitHub 自己的 daily trending 页面，其 “stars today” 数作为近 24 小时热度，并从卡片读取项目简介和语言。其它时间范围不启用这个回退。
 
 新增 `github-trending` 处理 profile，并将 OSS Insight 趋势源明确路由到该 profile。profile 只生成一个中文项目简介 block，不配置 `web_search` 或 `history_search`，避免把未核实的 README 内容补写进简介，也避免为这些项目增加外部背景查询。profile 指令要求保留仓库名，说明项目解决的问题、用途及适用对象；项目名、涨 Star 数、语言和仓库链接由日报渲染器从来源元数据直接显示。语言缺失时显示“未提供”，项目描述不足时简介明确说明信息有限。
 
@@ -32,9 +32,9 @@ Horizon 的筛选和摘要层会按 AI 评分排序，因此仅靠来源排序�
 
 ## 失败与边界
 
-- OSS Insight 无法访问或返回空榜单时，按 Horizon 现有来源错误处理继续其他来源；该栏目可能为空。
+- OSS Insight 无法访问时，按 Horizon 现有来源错误处理继续其他来源；其 API 明确标注热度数据不可用时，过去 24 小时榜单会回退到 GitHub daily trending 页面。
 - API 提供的仓库 description 可能为空或很短。此时中文简介必须指出来源信息有限，不应虚构 README 中不存在于输入内容的用途或能力。
-- 该榜单衡量的是短期新增 Star，不代表历史总 Star、项目质量或安全性。
+- 该榜单衡量的是短期新增 Star（回退页面显示 “stars today”），不代表历史总 Star、项目质量或安全性。
 - 项目数上限为 20；实际数量可能更少，受 API 返回和仓库 ID 去重影响。
 
 ## 验收标准

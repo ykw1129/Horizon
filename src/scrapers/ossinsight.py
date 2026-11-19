@@ -1,23 +1,29 @@
-"""OSS Insight trending repos scraper.
+"""GitHub trending repos scraper with OSS Insight as its primary source.
 
 Fetches star-gain rankings from api.ossinsight.io and emits them as
-ContentItems. An optional keyword filter narrows results to repos whose
-description, repo name, or collection names match at least one configured
-substring (case-insensitive). Without keywords, all trending repos in the
-configured languages flow through.
+ContentItems. If OSS Insight explicitly marks its event-derived ranking
+unavailable, the 24-hour configuration falls back to GitHub's daily trending
+page. An optional keyword filter narrows results to repos whose description,
+repo name, or collection names match at least one configured substring
+(case-insensitive).
 """
 
 from datetime import datetime, timezone
+import logging
+import re
 from typing import List, Optional
 
 import httpx
+from bs4 import BeautifulSoup
 
 from ..models import ContentItem, OSSInsightConfig, SourceType
 from .base import BaseScraper, FetchResult
 
+logger = logging.getLogger(__name__)
+
 
 class OSSInsightScraper(BaseScraper):
-    """Scraper for OSS Insight trending repositories endpoint."""
+    """Scraper for OSS Insight trends with a GitHub daily-page fallback."""
 
     BASE_URL = "https://api.ossinsight.io/v1/trends/repos"
 
@@ -79,6 +85,81 @@ class OSSInsightScraper(BaseScraper):
         payload = response.json()
         data = payload.get("data") or {}
         rows = data.get("rows") or []
+        data_quality = payload.get("data_quality") or {}
+        if (
+            data_quality.get("status") == "unavailable"
+            and data_quality.get("metric") == "github_event_derived_ranking"
+        ):
+            if period != "past_24_hours":
+                logger.warning(
+                    "OSS Insight trend ranking is unavailable; no GitHub daily fallback "
+                    "exists for period %s",
+                    period,
+                )
+                return []
+            logger.warning(
+                "OSS Insight star-gain ranking is unavailable; using GitHub daily trending"
+            )
+            return await self._fetch_github_daily_trending(language)
+        return rows
+
+    async def _fetch_github_daily_trending(self, language: str) -> List[dict]:
+        """Read GitHub's daily trending page when OSS Insight marks its metric unavailable."""
+        response = await self.client.get(
+            "https://github.com/trending",
+            params={"since": "daily"},
+            headers={
+                "Accept": "text/html",
+                "User-Agent": "Mozilla/5.0 Horizon/1.0",
+            },
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        rows = []
+        for card in soup.select("article.Box-row"):
+            repo_link = card.select_one("h2 a")
+            if repo_link is None:
+                continue
+            repo_name = str(repo_link.get("href") or "").strip("/")
+            if not repo_name or repo_name.count("/") != 1:
+                continue
+
+            card_text = " ".join(card.get_text(" ", strip=True).split())
+            stars_match = re.search(
+                r"([\d,]+)\s+stars?\s+today", card_text, re.IGNORECASE
+            )
+            if stars_match is None:
+                continue
+
+            language_node = card.select_one('[itemprop="programmingLanguage"]')
+            primary_language = (
+                language_node.get_text(" ", strip=True) if language_node else None
+            )
+            if language.casefold() != "all" and primary_language != language:
+                continue
+
+            description_node = card.select_one("p")
+            rows.append(
+                {
+                    "repo_name": repo_name,
+                    "repo_id": repo_name,
+                    "stars": int(stars_match.group(1).replace(",", "")),
+                    "forks": 0,
+                    "pushes": 0,
+                    "pull_requests": 0,
+                    "primary_language": primary_language,
+                    "description": (
+                        description_node.get_text(" ", strip=True)
+                        if description_node
+                        else ""
+                    ),
+                    "collection_names": None,
+                    "ranking_source": "github-trending",
+                }
+            )
         return rows
 
     def _row_to_item(self, row: dict, language: str) -> Optional[ContentItem]:
@@ -96,15 +177,24 @@ class OSSInsightScraper(BaseScraper):
 
         title = f"{repo_name} (+{stars_gained}⭐ {self.cfg.period})"
         url = f"https://github.com/{repo_name}"
+        ranking_source = row.get("ranking_source", "ossinsight")
+        source_type = (
+            SourceType.GITHUB
+            if ranking_source == "github-trending"
+            else SourceType.OSSINSIGHT
+        )
 
         content_lines = [
             f"Trending GitHub repo: {repo_name}",
             f"Stars gained ({self.cfg.period}): {stars_gained}",
-            f"Forks gained: {row.get('forks', 0)}",
-            f"Pushes: {row.get('pushes', 0)}",
-            f"Pull requests: {row.get('pull_requests', 0)}",
             f"Language: {primary_language or 'Unknown'}",
         ]
+        if ranking_source == "ossinsight":
+            content_lines[2:2] = [
+                f"Forks gained: {row.get('forks', 0)}",
+                f"Pushes: {row.get('pushes', 0)}",
+                f"Pull requests: {row.get('pull_requests', 0)}",
+            ]
         if description:
             content_lines.append("")
             content_lines.append(description)
@@ -114,8 +204,8 @@ class OSSInsightScraper(BaseScraper):
             content_lines.append(f"OSS Insight collections: {collections}")
 
         return ContentItem(
-            id=self._generate_id(SourceType.OSSINSIGHT.value, "trending", str(repo_id)),
-            source_type=SourceType.OSSINSIGHT,
+            id=self._generate_id(source_type.value, "trending", str(repo_id)),
+            source_type=source_type,
             title=title,
             url=url,
             content="\n".join(content_lines),
@@ -133,6 +223,7 @@ class OSSInsightScraper(BaseScraper):
                 "collection_names": collections,
                 "description": description,
                 "category": self.cfg.category,
+                "ranking_source": ranking_source,
             },
         )
 

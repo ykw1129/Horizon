@@ -416,9 +416,18 @@ class DailySummarizer:
             )
             if not project_language or project_language.casefold() == "all":
                 project_language = "未提供"
+            is_github_fallback = meta.get("ranking_source") == "github-trending"
+            period_label_zh = (
+                "今日新增" if is_github_fallback else "过去 24 小时新增"
+            )
+            period_label_en = (
+                "stars gained today"
+                if is_github_fallback
+                else "stars gained in the past 24 hours"
+            )
             if language == "zh":
                 trending_details = (
-                    f"**GitHub 热度**：过去 24 小时新增 {stars_display} Star · "
+                    f"**GitHub 热度**：{period_label_zh} {stars_display} Star · "
                     f"主要语言：{_escape_markdown(project_language)}"
                 )
                 trending_details = _pangu(trending_details)
@@ -428,7 +437,7 @@ class DailySummarizer:
                 if project_language == "未提供":
                     project_language = "not provided"
                 trending_details = (
-                    f"**GitHub trend**: {stars_display} stars gained in the past 24 hours · "
+                    f"**GitHub trend**: {stars_display} {period_label_en} · "
                     f"Primary language: {_escape_markdown(project_language)}"
                 )
 

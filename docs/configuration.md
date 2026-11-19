@@ -621,6 +621,11 @@ Pulls top star-gain repositories from the [OSS Insight](https://ossinsight.io) p
 
 No API key is required.
 
+If OSS Insight marks its `github_event_derived_ranking` metric unavailable,
+Horizon falls back to GitHub's daily trending page for `past_24_hours`. The
+fallback uses the page's “stars today” count, project description, and language.
+Other time windows do not use this fallback.
+
 ## Filtering
 
 Score filtering is configured under `processing.profile_settings` in the runtime

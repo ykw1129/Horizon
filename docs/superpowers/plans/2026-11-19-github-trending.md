@@ -4,15 +4,16 @@
 
 **Goal:** Add a Chinese GitHub trending projects section with up to 20 repositories ranked by stars gained over the previous 24 hours.
 
-**Architecture:** Enable the existing OSS Insight repository trends source and route it to a dedicated `github-trending` profile. The profile creates a Chinese, source-grounded project description without external research tools. Preserve the source's star-gain ranking when Horizon builds the final summary.
+**Architecture:** Enable the existing OSS Insight repository trends source and route it to a dedicated `github-trending` profile. When OSS Insight explicitly marks its event-derived ranking unavailable, use GitHub's daily trending page for the 24-hour list. The profile creates a Chinese, source-grounded project description without external research tools. Preserve the source's star-gain ranking when Horizon builds the final summary.
 
-**Tech Stack:** Horizon Python application, Pydantic configuration, Markdown-backed profile prompts, OSS Insight public HTTP API.
+**Tech Stack:** Horizon Python application, Pydantic configuration, Markdown-backed profile prompts, OSS Insight public HTTP API, GitHub daily trending HTML page.
 
 ## Global Constraints
 
 - Rank projects by stars gained during `past_24_hours`, not historical total stars.
 - Query `All` languages and retain up to 20 repositories with no minimum gained-star threshold.
-- Write short Chinese project descriptions using only OSS Insight descriptions and metadata; state when source information is insufficient.
+- If OSS Insight returns `data_quality.status == "unavailable"` for `github_event_derived_ranking`, use GitHub daily trending only for `past_24_hours`; take its “stars today” count, description, and language.
+- Write short Chinese project descriptions using only the active source's description and metadata; state when source information is insufficient.
 - Do not change the existing news sources, email subscriber list, or 08:00 Windows schedule.
 - Do not include credentials or ignored `data/config.json` in a Git commit.
 - Preserve the unrelated, uncommitted email formatter fix in `src/services/email.py`.
@@ -31,7 +32,7 @@
 - Consumes: OSS Insight `ContentItem` fields `title`, `url`, `content`, `profile`, and metadata `stars_gained`, `primary_language`, and `description`.
 - Produces: Profile ID `github-trending`, Chinese display name `GitHub 热门项目`, and one required primary `summary` block with no external tools.
 
-- [ ] **Step 1: Create `profiles/github-trending/profile.json`**
+- [x] **Step 1: Create `profiles/github-trending/profile.json`**
 
 ```json
 {
@@ -56,7 +57,7 @@
 }
 ```
 
-- [ ] **Step 2: Create the profile prompts**
+- [x] **Step 2: Create the profile prompts**
 
 `profiles/github-trending/match.md`:
 
@@ -98,7 +99,7 @@ Write the required `summary` block in Chinese in two to four complete sentences.
 Use only the supplied repository description and metadata. Do not use outside knowledge or infer features from the repository name. If the description is missing or too vague, say that the source provides too little information to explain the project accurately. Do not claim that star growth proves quality, safety, or long-term popularity.
 ```
 
-- [ ] **Step 3: Confirm profile files align with the loaded profile schema**
+- [x] **Step 3: Confirm profile files align with the loaded profile schema**
 
 Inspect `ProfileDefinition` and `ProfileBlock` in `src/processing/profiles.py`. The ID must match `^[a-z][a-z0-9_-]*$`; the required block must have a unique lowercase ID and at most one non-optional primary block.
 
@@ -113,7 +114,7 @@ Inspect `ProfileDefinition` and `ProfileBlock` in `src/processing/profiles.py`. 
 - Consumes: profile `github-trending` created in Task 1.
 - Produces: OSS Insight items explicitly routed to `github-trending`; no score or topic-dedup filtering for this profile; the section appears first in the digest.
 
-- [ ] **Step 1: Set the `sources.ossinsight` block**
+- [x] **Step 1: Set the `sources.ossinsight` block**
 
 ```json
 {
@@ -128,7 +129,7 @@ Inspect `ProfileDefinition` and `ProfileBlock` in `src/processing/profiles.py`. 
 }
 ```
 
-- [ ] **Step 2: Register the profile's filtering behavior and summary priority**
+- [x] **Step 2: Register the profile's filtering behavior and summary priority**
 
 Set `processing.profile_settings.github-trending` to:
 
@@ -149,17 +150,31 @@ Do not modify other source settings, AI settings, email settings, or schedule se
 
 ---
 
-### Task 3: Keep the visible project order by star gain
+### Task 3: Add a GitHub daily fallback and preserve source metadata
 
 **Files:**
 - Modify: `src/scrapers/ossinsight.py`, method `OSSInsightScraper._row_to_item`
 - Modify: `src/ai/summarizer.py`, methods `DailySummarizer.build_view` and `_format_item`
 
 **Interfaces:**
-- Consumes: OSS Insight row language and metadata plus grouped `ContentItem` lists after Horizon's score-based selection.
-- Produces: missing language is represented as unavailable rather than the `All` query bucket; `github-trending` items display exact repository name, gained stars, and language from metadata, then sort by `stars_gained` descending. Other profile groups retain their existing order.
+- Consumes: OSS Insight response data-quality metadata, GitHub daily trending cards, and grouped `ContentItem` lists after Horizon's score-based selection.
+- Produces: an explicit unavailable metric triggers GitHub's daily page only for `past_24_hours`; fallback items have GitHub source type and metadata; missing language is unavailable rather than the `All` query bucket; `github-trending` items display exact repository name, gained stars, and language from metadata, then sort by `stars_gained` descending. Label fallback counts as “today” and OSS Insight counts as “past 24 hours.” Other profile groups retain their existing order.
 
-- [ ] **Step 1: Keep `All` from becoming a false repository language**
+- [x] **Step 1: Fall back only when OSS Insight marks the ranking unavailable**
+
+In `_fetch_period`, read `payload.get("data_quality") or {}`. When `status` equals `"unavailable"` and `metric` equals `"github_event_derived_ranking"`, call `_fetch_github_daily_trending(language)` only for `period == "past_24_hours"`; for other periods, return an empty row list. Do not use the fallback merely because a successful OSS Insight response has no rows.
+
+Implement `_fetch_github_daily_trending(language)` in `OSSInsightScraper` with the declared `beautifulsoup4` dependency:
+
+1. GET `https://github.com/trending?since=daily` with a browser-style User-Agent, a 30-second timeout, and redirects enabled.
+2. Parse each `article.Box-row`; get repository path from `h2 a[href]`, description from `p`, and language from `[itemprop="programmingLanguage"]`.
+3. Parse `stars today` with case-insensitive regex `([\d,]+)\s+stars?\s+today`; skip cards without the count or a valid `owner/repo` path.
+4. When `language` is not `All`, keep only cards whose programming language matches it.
+5. Return rows with `repo_name`, `repo_id`, integer `stars`, `primary_language`, `description`, `ranking_source="github-trending"`, and zero defaults for unavailable activity metrics.
+
+In `_row_to_item`, set the item source type to `SourceType.GITHUB` for `ranking_source == "github-trending"`, otherwise retain `SourceType.OSSINSIGHT`. Keep the configured category and profile on either route.
+
+- [x] **Step 2: Keep `All` from becoming a false repository language**
 
 In `_row_to_item`, replace the language fallback with:
 
@@ -171,7 +186,7 @@ if primary_language is None and language.casefold() != "all":
 
 Format the input content line as `Language: {primary_language or 'Unknown'}` and preserve `None` in `metadata["primary_language"]` when the all-language response lacks a language.
 
-- [ ] **Step 2: Sort the GitHub trending group before creating view items**
+- [x] **Step 3: Sort the GitHub trending group before creating view items**
 
 Inside the loop over `ordered_groups`, before enumerating `profile_items`, use:
 
@@ -186,7 +201,7 @@ if profile_id == "github-trending":
 
 Keep `global_index`, item anchors, profile ordering, and all other group ordering unchanged.
 
-- [ ] **Step 3: Render project identifiers and metrics from metadata**
+- [x] **Step 4: Render project identifiers and metrics from metadata**
 
 In `_format_item`, set `meta = item.metadata` and `profile_id = self._profile_id(item)` before building the title. For `github-trending`, use `meta["repo"]` instead of the generated title when it is a non-empty string, so the repository name stays exact. Build metric values as follows:
 
@@ -220,13 +235,14 @@ Render `**GitHub 热度**：过去 24 小时新增 {stars_display} Star · 主�
 - Review: `profiles/github-trending/enrichment.md`
 - Review: `src/scrapers/ossinsight.py`
 - Review: `src/ai/summarizer.py`
+- Review: `docs/configuration.md`
 - Validate only: ignored `data/config.json`
 
 **Interfaces:**
 - Consumes: Tasks 1-3.
 - Produces: Loaded profile and configuration, with only intended tracked feature files committed.
 
-- [ ] **Step 1: Load the application config and profile registry**
+- [x] **Step 1: Load the application config and profile registry**
 
 From the repository root, run this read-only integrity check:
 
@@ -257,7 +273,7 @@ print("config_and_profile_loaded=True")
 
 Expected output: `config_and_profile_loaded=True`.
 
-- [ ] **Step 2: Review and commit tracked feature files only**
+- [x] **Step 2: Review and commit tracked feature files only**
 
 Run `git diff --check`, then stage only `profiles/github-trending/`, `src/scrapers/ossinsight.py`, and `src/ai/summarizer.py`. Commit with:
 
