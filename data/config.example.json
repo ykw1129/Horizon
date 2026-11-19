@@ -21,6 +21,10 @@
         "threshold": 4.0,
         "topic_dedup": false
       },
+      "x-hotspots": {
+        "threshold": 5.0,
+        "topic_dedup": false
+      },
       "finance-news": {
         "threshold": 7.0,
         "topic_dedup": true
@@ -140,6 +144,7 @@
       "users": ["karpathy", "ylecun"],
       "keywords": [],
       "fetch_limit": 10,
+      "actor_id": "xquik~x-tweet-scraper",
       "fetch_reply_text": false,
       "max_replies_per_tweet": 3,
       "max_tweets_to_expand": 10,

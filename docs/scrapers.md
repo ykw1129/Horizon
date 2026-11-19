@@ -216,16 +216,16 @@ Behavior:
 
 **File**: `src/scrapers/twitter.py`
 
-Uses the [Apify](https://apify.com) platform to bypass Twitter's anti-scraping measures. The actor `altimis~scweet` is called via the Apify REST API.
+Uses the [Apify](https://apify.com) platform to collect X posts. By default, Horizon calls the community-maintained [`xquik~x-tweet-scraper` actor](https://apify.com/xquik/x-tweet-scraper) via the Apify REST API.
 
 Flow:
 1. POST to `/v2/acts/{actor_id}/runs` to trigger a run
 2. Poll `/v2/actor-runs/{run_id}` until status is `SUCCEEDED` or a terminal failure
 3. GET `/v2/datasets/{dataset_id}/items` to retrieve results
 
-Profile timelines use `source_mode: "profiles"`. Keyword discovery and reply expansion reuse `source_mode: "search"` with `search_query`.
+Profile timelines use Xquik's `profileTweets` mode and `twitterHandles`. Keyword discovery uses `search` mode and `searchTerms`. `maxItemsPerTarget` applies an independent cap to each handle or search term, with `maxItems` limiting the entire actor run.
 
-When users are configured, a single profile run fetches their timelines together. Each non-empty keyword query starts a separate search run, independently of the configured users. Either path can be used on its own. Results are filtered to the current time window and merged with deduplication by tweet ID across all runs.
+When users are configured, a single profile run fetches their timelines together. All configured keyword queries share one search run, independently of the configured users. Either path can be used on its own. Results are filtered to the current time window and merged with deduplication by tweet ID across runs.
 
 **Config** (`sources.twitter`):
 
@@ -239,22 +239,24 @@ When users are configured, a single profile run fetches their timelines together
   "max_replies_per_tweet": 3,
   "max_tweets_to_expand": 10,
   "reply_min_likes": 5,
-  "actor_id": "altimis~scweet",
+  "actor_id": "xquik~x-tweet-scraper",
   "apify_token_env": "APIFY_TOKEN"
 }
 ```
 
-- `users` — Twitter screen names to monitor, without the `@` prefix
-- `keywords` — independent Apify search queries (`source_mode: "search"`), not filters on the configured users' timelines. Not supported in Playwright mode.
-- `fetch_limit` — in Apify mode, each profile or keyword-search actor run requests up to `max(100, fetch_limit)` tweets. This is not a combined limit: the example above starts three discovery runs with a limit of 100 tweets each, before time filtering and deduplication. Each keyword adds an actor run and associated Apify usage.
+- `users` — X screen names to monitor, without the `@` prefix
+- `keywords` — independent Apify search queries (`searchTerms`), not filters on the configured users' timelines. Not supported in Playwright mode.
+- `fetch_limit` — maximum posts requested per handle or search term. A source with multiple handles or terms can therefore return more than this value before time filtering and deduplication. Keyword searches share one Xquik actor run.
 - `category` — optional tag for balanced digest grouping (applies to all tweets from this source)
 - `fetch_reply_text` — when `true`, a second Apify run fetches reply bodies for each important tweet and appends them under `--- Top Comments ---` for AI analysis
 - `max_replies_per_tweet` — maximum reply lines per tweet (sorted by engagement score)
 - `max_tweets_to_expand` — cap on reply expansion runs per pipeline cycle, to control Apify credit usage
 - `reply_min_likes` — minimum likes required for a reply to be included
-- `actor_id` — Apify actor ID (default: `altimis~scweet`)
+- `actor_id` — Apify actor ID (default: `xquik~x-tweet-scraper`)
 - `apify_token_env` — environment variable name containing the Apify API token
 
-**Authentication**: Set `APIFY_TOKEN` in your `.env`. Get a token at [console.apify.com](https://console.apify.com/account/integrations).
+**Authentication**: Set `APIFY_TOKEN` in your `.env`. Requests send it in the `Authorization` header. Get a token at [console.apify.com](https://console.apify.com/account/integrations).
 
-**Extracted data**: tweet text, URL, author, publish time, likes, retweets, replies, views, category, and (optionally) reply-thread text appended under `--- Top Comments ---`.
+The Xquik actor is a third-party, pay-per-result service. Check its current [pricing and input schema](https://apify.com/xquik/x-tweet-scraper/input-schema) before changing limits. The X-hotspots configuration requests at most 30 posts for each of two terms (60 total) and shows at most 10.
+
+**Extracted data**: post text, URL, author, publish time, likes, reposts, replies, views, category, and (optionally) reply-thread text appended under `--- Top Comments ---`.

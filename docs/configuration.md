@@ -511,7 +511,7 @@ Telegram scraping uses the public web preview at `https://t.me/s/<channel>`, so 
 
 ### Twitter
 
-Requires an [Apify](https://apify.com) account. Set `APIFY_TOKEN` in your `.env` file. The free tier includes $5/month of credit, enough for roughly 20,000 tweets.
+Requires an [Apify](https://apify.com) account. Set `APIFY_TOKEN` in your `.env` file. Horizon's default Xquik actor currently charges per delivered post, and Apify bills platform usage separately; check the actor's current pricing before changing limits.
 
 ```json
 {
@@ -531,9 +531,9 @@ Requires an [Apify](https://apify.com) account. Set `APIFY_TOKEN` in your `.env`
 }
 ```
 
-- `users` — Twitter screen names to monitor, without the `@` prefix
-- `keywords` — independent X search queries fetched via Apify scweet `source_mode: "search"`. These search beyond the configured `users`; they do not filter those users' timelines. Playwright mode logs a warning and skips keyword fetching.
-- `fetch_limit` — in Apify mode, the requested tweet limit per actor run is `max(100, fetch_limit)`. All configured users share one profile run, and each non-empty keyword query starts a separate search run. This is not a total limit for the Twitter source.
+- `users` — X screen names to monitor, without the `@` prefix
+- `keywords` — independent X search queries fetched through the Apify Xquik actor's `searchTerms`. These search beyond the configured `users`; they do not filter those users' timelines. Playwright mode logs a warning and skips keyword fetching.
+- `fetch_limit` — maximum posts requested per handle or search term. Multiple handles or terms can yield more than this total before time filtering and deduplication. Keyword searches share one actor run.
 - `category` — optional tag for balanced digest grouping (applies to all tweets from this source)
 - `fetch_reply_text` — when `true`, fetch actual reply bodies for important tweets and append them under `--- Top Comments ---` so the AI can factor in community discussion. Disabled by default.
 - `max_replies_per_tweet` — maximum reply lines to append per tweet (default: 3)
@@ -542,9 +542,9 @@ Requires an [Apify](https://apify.com) account. Set `APIFY_TOKEN` in your `.env`
 
 You can configure users, keywords, or both. Results are filtered to the current time window and merged, with duplicate tweet IDs removed across timelines and searches.
 
-For example, the configuration above starts three discovery runs: one for both users and one for each of the two keywords. Each run requests up to 100 tweets, for up to 300 before time filtering and deduplication. Adding keyword queries increases Apify usage; optional reply expansion starts additional runs.
+For example, the configuration above starts two discovery runs: one for both users and one for both keyword searches. Each run requests up to 10 posts per target (with a run-wide cap), before time filtering and deduplication. Optional reply expansion starts additional runs.
 
-The scraper uses the `altimis/scweet` actor by default. You can override it with `actor_id` if needed.
+The scraper uses the community-maintained `xquik/x-tweet-scraper` actor by default. It applies Apify authentication through the Authorization header. X-hotspots uses a cap of 30 posts for each of its two terms, then sorts the combined results and keeps at most 10 posts from the last 24 hours. This third-party actor charges per delivered result; check its current [pricing and input schema](https://apify.com/xquik/x-tweet-scraper/input-schema). You can override the actor with `actor_id` if needed.
 
 ### OpenBB Financial News
 

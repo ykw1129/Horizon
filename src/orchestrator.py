@@ -384,8 +384,14 @@ class HorizonOrchestrator:
                         f"{self.icons['email']} Sending {lang.upper()} email summary..."
                     )
                     subscribers = self.storage.load_subscribers()
-                    subject = f"Horizon Summary ({lang.upper()}) - {today}"
-                    self.email_manager.send_daily_summary(summary, subject, subscribers)
+                    subject = (
+                        f"Horizon 每日速递 · {today}"
+                        if lang == "zh"
+                        else f"Horizon Summary ({lang.upper()}) - {today}"
+                    )
+                    self.email_manager.send_daily_summary(
+                        summary, subject, subscribers, language=lang
+                    )
 
                 # Send webhook notification if configured
                 if self.webhook_notifier:

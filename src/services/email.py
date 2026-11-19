@@ -10,6 +10,7 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.header import Header
 from email.policy import default
 from email.utils import parseaddr
 from typing import List
@@ -32,6 +33,7 @@ _ESCAPED_ENTITY_RE = re.compile(r"&\\#(x?[0-9A-Fa-f]+);")
 _MARKDOWN_BACKSLASH_RE = re.compile(r"\\([\\`*_{}\[\]()<>#!|+.-])")
 _LIST_ITEM = r"[ \t]*(?:\d+[.)]|[-*+])[ \t]"
 _LIST_AFTER_TEXT_RE = re.compile(rf"(?m)^((?!{_LIST_ITEM}).*\S.*)\n(?={_LIST_ITEM})")
+_LOCAL_SUMMARY_LINK_RE = re.compile(r"\[((?:\\.|[^\]])+)\]\(#item-[^)]+\)")
 
 
 def _escape_email_text(value: str) -> str:
@@ -82,6 +84,127 @@ def _render_email_markdown(value: str) -> str:
         _EmailCodeInlineProcessor(markdown.inlinepatterns.BACKTICK_RE), "backtick", 190
     )
     return parser.convert(value)
+
+
+def _apply_email_inline_styles(markup: str) -> str:
+    """Apply inline styles because many mail clients drop document CSS."""
+    styles = {
+        "h1": "margin:0 0 10px;color:#14243a;font-size:26px;line-height:1.25;font-weight:700",
+        "h2": "margin:0;color:#14243a;font-size:18px;line-height:1.35;font-weight:700;overflow-wrap:anywhere;word-break:break-word",
+        "h3": "margin:0 0 12px;color:#14243a;font-size:16px;line-height:1.4;font-weight:700;overflow-wrap:anywhere;word-break:break-word",
+        "p": "margin:0 0 13px;color:#26354a;font-size:14px;line-height:1.7",
+        "a": "color:#087f8c;text-decoration:none",
+        "ul": "margin:0 0 14px;padding-left:22px;color:#26354a;font-size:14px;line-height:1.7",
+        "ol": "margin:0 0 14px;padding-left:22px;color:#26354a;font-size:14px;line-height:1.7",
+        "li": "margin:0 0 6px;padding-left:2px",
+        "blockquote": "margin:10px 0 18px;padding:10px 14px;border-left:3px solid #36a7a0;background:#eef7f6;color:#536477;font-size:13px;line-height:1.6",
+        "code": "padding:2px 5px;border-radius:4px;background:#edf1f5;color:#23374d;font-family:Consolas,monospace;font-size:13px",
+        "pre": "margin:0;padding:14px;border-radius:6px;background:#edf1f5;color:#23374d;white-space:pre-wrap;font-family:Consolas,monospace;font-size:13px;line-height:1.6",
+        "details": "margin:12px 0;color:#536477;font-size:13px",
+        "summary": "color:#087f8c;font-weight:600",
+    }
+    for tag, style in styles.items():
+        pattern = re.compile(rf"<{tag}(\s[^>]*)?>", re.IGNORECASE)
+
+        def add_style(match, tag=tag, style=style):
+            attributes = match.group(1) or ""
+            if re.search(r"\bstyle\s*=", attributes, re.IGNORECASE):
+                return match.group(0)
+            return f'<{tag}{attributes} style="{style}">'
+
+        markup = pattern.sub(add_style, markup)
+    return re.sub(
+        r"<hr\s*/?>",
+        '<div style="height:8px;line-height:8px;font-size:8px">&nbsp;</div>',
+        markup,
+        flags=re.IGNORECASE,
+    )
+
+
+def _layout_email_blocks(markup: str) -> str:
+    """Wrap summary sections and item blocks in email-safe presentation tables."""
+    # Keep each divider as its own token so following text and headings remain
+    # in the message instead of being swallowed with the <hr> block.
+    parts = re.split(
+        r"(<hr\b[^>]*>|(?=<h[23]\b))", markup, flags=re.IGNORECASE
+    )
+    output = []
+    item_open = False
+
+    def close_item():
+        nonlocal item_open
+        if item_open:
+            output.append("</td></tr></table>")
+            item_open = False
+
+    for part in parts:
+        if not part:
+            continue
+        if re.match(r"<hr\b", part, re.IGNORECASE):
+            close_item()
+            output.append(
+                '<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>'
+            )
+        elif re.match(r"<h2\b", part, re.IGNORECASE):
+            close_item()
+            output.append(
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:22px 0 12px;border-bottom:1px solid #dce5ec">'
+                '<tr><td style="padding:0 0 9px;border-left:4px solid #36a7a0;padding-left:11px">'
+                + _apply_email_inline_styles(part)
+                + "</td></tr></table>"
+            )
+        elif re.match(r"<h3\b", part, re.IGNORECASE):
+            close_item()
+            output.append(
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 13px;background:#ffffff;border:1px solid #e2e9ef;border-radius:8px">'
+                '<tr><td style="padding:16px 18px;overflow-wrap:anywhere;word-break:break-word">'
+            )
+            output.append(_apply_email_inline_styles(part))
+            item_open = True
+        else:
+            output.append(_apply_email_inline_styles(part))
+
+    close_item()
+    return "".join(output)
+
+
+def _render_email_document(
+    content_html: str,
+    sender_name: str,
+    unsubscribe_keyword: str,
+    language: str = "en",
+) -> str:
+    """Wrap rendered summary content in a single-column, table-based email."""
+    sender = html.escape(sender_name, quote=True)
+    unsubscribe = html.escape(unsubscribe_keyword, quote=True)
+    is_chinese = language == "zh"
+    html_language = "zh-CN" if is_chinese else "en"
+    sender_label = "发件人：" if is_chinese else "Sent by "
+    unsubscribe_message = (
+        f"退订请向此邮箱发送新邮件，主题必须为“{unsubscribe}”。"
+        if is_chinese
+        else f'To unsubscribe, send a new email to this address with the subject “{unsubscribe}”.'
+    )
+    return f"""<!DOCTYPE html>
+<html lang="{html_language}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f1f4f7;color:#26354a;font-family:Arial,'Microsoft YaHei',sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f4f7" style="width:100%;background:#f1f4f7">
+<tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;border-collapse:separate;border-spacing:0">
+<tr><td bgcolor="#14243a" style="padding:20px 24px;background:#14243a;border-top:4px solid #36a7a0;border-radius:10px 10px 0 0">
+<div style="color:#ffffff;font-size:13px;letter-spacing:1.5px;font-weight:700">HORIZON · DAILY BRIEFING</div>
+</td></tr>
+<tr><td bgcolor="#ffffff" style="padding:24px;background:#ffffff;border-radius:0 0 10px 10px">
+{content_html}
+</td></tr>
+<tr><td align="center" style="padding:18px 12px 0;color:#718096;font-size:12px;line-height:1.6">
+<div>{sender_label}{sender}</div>
+<div>{unsubscribe_message}</div>
+</td></tr>
+</table>
+</td></tr></table>
+</body></html>"""
 
 
 class EmailManager:
@@ -233,42 +356,45 @@ class EmailManager:
             raise
         return server
 
-    def send_daily_summary(self, summary_md: str, subject: str, subscribers: List[str]):
+    def send_daily_summary(
+        self,
+        summary_md: str,
+        subject: str,
+        subscribers: List[str],
+        language: str = "en",
+    ):
         """Sends the daily summary to all subscribers."""
         if not self.config.enabled or not subscribers:
             return
 
         cleaned_summary = clean_app_summary_markdown(summary_md)
-        safe_summary = _prepare_email_markdown(cleaned_summary)
-        html_content = (
-            _render_email_markdown(safe_summary)
-            if markdown
-            else f"<pre>{safe_summary}</pre>"
-        )
+        # Email clients do not keep the Markdown summary's generated anchor
+        # elements, so turn its table-of-contents jumps into plain text.
+        cleaned_summary = _LOCAL_SUMMARY_LINK_RE.sub(r"\1", cleaned_summary)
+        try:
+            safe_summary = _prepare_email_markdown(cleaned_summary)
+            rendered_summary = (
+                _render_email_markdown(safe_summary)
+                if markdown
+                else f"<pre>{html.escape(cleaned_summary)}</pre>"
+            )
+            email_content = _layout_email_blocks(rendered_summary)
+        except Exception as exc:
+            logger.warning(
+                "Could not render HTML summary; using escaped text fallback: %s",
+                exc,
+            )
+            email_content = (
+                f'<pre style="margin:0;white-space:pre-wrap;font:14px/1.7 Arial,sans-serif">'
+                f"{html.escape(cleaned_summary)}</pre>"
+            )
 
-        html_body = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{ font-family: sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                h1, h2, h3 {{ color: #2c3e50; }}
-                code {{ background-color: #f4f4f4; padding: 2px 5px; border-radius: 3px; font-family: monospace; }}
-                pre {{ background-color: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-                blockquote {{ border-left: 4px solid #ddd; padding-left: 15px; color: #777; }}
-                .footer {{ margin-top: 40px; font-size: 12px; color: #888; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }}
-            </style>
-        </head>
-        <body>
-            {html_content}
-            <div class="footer">
-                <p>Sent by {self.config.sender_name}</p>
-                <p>To unsubscribe, please reply with "{self.config.unsubscribe_keyword}"</p>
-            </div>
-        </body>
-        </html>
-        """
+        html_body = _render_email_document(
+            email_content,
+            self.config.sender_name,
+            self.config.unsubscribe_keyword,
+            language=language,
+        )
 
         try:
             with self._open_smtp() as server:
@@ -278,14 +404,14 @@ class EmailManager:
 
                 for subscriber in subscribers:
                     msg = MIMEMultipart("alternative")
-                    msg["Subject"] = subject
+                    msg["Subject"] = Header(subject, "utf-8")
                     msg["From"] = (
                         f"{self.config.sender_name} <{self.config.email_address}>"
                     )
                     msg["To"] = subscriber
 
-                    text_part = MIMEText(cleaned_summary, "plain")
-                    html_part = MIMEText(html_body, "html")
+                    text_part = MIMEText(cleaned_summary, "plain", "utf-8")
+                    html_part = MIMEText(html_body, "html", "utf-8")
 
                     msg.attach(text_part)
                     msg.attach(html_part)

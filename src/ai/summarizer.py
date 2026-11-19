@@ -40,6 +40,14 @@ def _safe_url(value: object) -> Optional[str]:
     return html.escape(encoded, quote=True)
 
 
+def _metadata_count(value: object) -> int:
+    """Normalize a public engagement count for display and ordering."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _pangu(text: str) -> str:
     """Insert a space between CJK and ASCII letters/digits (Pangu spacing)."""
     text = re.sub(rf"({_CJK})({_ASCII})", r"\1 \2", text)
@@ -87,6 +95,17 @@ LABELS = {
             "2. 添加更多多样化的信息源\n"
             "3. 检查 AI 模型是否正常工作\n"
         ),
+    },
+}
+
+EMPTY_PROFILE_MESSAGES = {
+    "zh": {
+        "x-hotspots": "今日暂无可展示的 X 热点内容。",
+        "finance-news": "今日暂无可展示的财经新闻。",
+    },
+    "en": {
+        "x-hotspots": "No X posts are available for this digest.",
+        "finance-news": "No finance stories are available for this digest.",
     },
 }
 
@@ -151,6 +170,10 @@ class DailySummarizer:
         for item in items:
             grouped_items.setdefault(self._profile_id(item), []).append(item)
 
+        for profile_id in ("x-hotspots", "finance-news"):
+            if profile_id in self.profile_order and profile_id not in grouped_items:
+                grouped_items[profile_id] = []
+
         ordered_groups = list(grouped_items.items())
         if self.profile_order:
             order = {
@@ -171,6 +194,15 @@ class DailySummarizer:
                     key=lambda item: int(item.metadata.get("stars_gained") or 0),
                     reverse=True,
                 )
+            elif profile_id == "x-hotspots":
+                profile_items = sorted(
+                    profile_items,
+                    key=lambda item: (
+                        _metadata_count(item.metadata.get("engagement_score")),
+                        item.published_at.timestamp() if item.published_at else 0,
+                    ),
+                    reverse=True,
+                )[:10]
             view_items = []
             for index, item in enumerate(profile_items, start=1):
                 artifact = (
@@ -247,6 +279,32 @@ class DailySummarizer:
         toc_sections = []
         body_sections = []
         view = self.build_view(items, language)
+        highlighted_items = []
+        for group in view.groups:
+            highlighted_items.extend(group.items)
+
+        def highlight_key(view_item: SummaryItemView) -> tuple[float, int]:
+            try:
+                score_value = float(view_item.score)
+            except (TypeError, ValueError):
+                score_value = -1.0
+            return score_value, -view_item.global_index
+
+        highlights = sorted(highlighted_items, key=highlight_key, reverse=True)[:3]
+        highlight_section = ""
+        if highlights:
+            highlight_heading = "今日重点" if language == "zh" else "Top Highlights"
+            highlight_lines = [f"## {highlight_heading}", ""]
+            for view_item in highlights:
+                title = _escape_markdown(view_item.title)
+                if language == "zh":
+                    title = _pangu(title)
+                source_url = _safe_url(view_item.item.url)
+                highlight_lines.append(
+                    f"- [{title}]({source_url})" if source_url else f"- {title}"
+                )
+            highlight_section = "\n".join(highlight_lines) + "\n\n"
+
         for group in view.groups:
             profile_name = _escape_markdown(group.name)
             if language == "zh":
@@ -256,12 +314,22 @@ class DailySummarizer:
                 title = _escape_markdown(view_item.title)
                 if language == "zh":
                     title = _pangu(title)
+                rating = (
+                    "" if group.profile_id == "x-hotspots"
+                    else f" \u2b50\ufe0f {view_item.score}/10"
+                )
                 toc_entries.append(
-                    f"{view_item.index}. [{title}](#{view_item.anchor_id}) "
-                    f"\u2b50\ufe0f {view_item.score}/10"
+                    f"{view_item.index}. [{title}](#{view_item.anchor_id}){rating}"
                 )
             toc_sections.append("\n".join(toc_entries))
             body_sections.append(f"## {profile_name}\n\n")
+            if not group.items:
+                empty_message = EMPTY_PROFILE_MESSAGES.get(language, {}).get(
+                    group.profile_id,
+                    "No content available." if language != "zh" else "今日暂无可展示内容。",
+                )
+                body_sections.append(f"{empty_message}\n\n")
+                continue
             body_sections.extend(
                 self._format_item(
                     view_item.item,
@@ -277,7 +345,9 @@ class DailySummarizer:
             )
 
         toc = "\n\n".join(toc_sections) + "\n\n---\n\n"
-        return normalize_language(header + toc + "".join(body_sections), language)
+        return normalize_language(
+            header + highlight_section + toc + "".join(body_sections), language
+        )
 
     def generate_webhook_overview(
         self,
@@ -402,6 +472,7 @@ class DailySummarizer:
             primary_content = _pangu(primary_content)
 
         trending_details = ""
+        x_hotspot_details = ""
         if profile_id == "github-trending":
             raw_stars = meta.get("stars_gained")
             try:
@@ -440,6 +511,26 @@ class DailySummarizer:
                     f"**GitHub trend**: {stars_display} {period_label_en} · "
                     f"Primary language: {_escape_markdown(project_language)}"
                 )
+        elif profile_id == "x-hotspots":
+            likes = _metadata_count(meta.get("favorite_count"))
+            reposts = _metadata_count(meta.get("retweet_count"))
+            replies = _metadata_count(meta.get("reply_count"))
+            views = meta.get("view_count")
+            view_count = _metadata_count(views) if views is not None else None
+            if language == "zh":
+                x_hotspot_details = (
+                    f"**互动**：❤️ {likes:,} · 🔁 {reposts:,} · 💬 {replies:,}"
+                )
+                if view_count is not None:
+                    x_hotspot_details += f" · 👁 {view_count:,}"
+                x_hotspot_details = _pangu(x_hotspot_details)
+            else:
+                x_hotspot_details = (
+                    f"**Engagement**: {likes:,} likes · {reposts:,} reposts · "
+                    f"{replies:,} replies"
+                )
+                if view_count is not None:
+                    x_hotspot_details += f" · {view_count:,} views"
 
         # Source line with parts joined by " · ", link appended at end
         source_type = item.source_type.value
@@ -469,12 +560,15 @@ class DailySummarizer:
 
         title_link = f"[{title}]({url})" if url else title
 
+        heading_rating = "" if profile_id == "x-hotspots" else f" ⭐️ {score}/10"
         lines = [
             f'<a id="{anchor_id or f"item-{index}"}"></a>',
-            f"{'#' * heading_level} {title_link} \u2b50\ufe0f {score}/10",  # ⭐️
+            f"{'#' * heading_level} {title_link}{heading_rating}",
         ]
         if trending_details:
             lines.extend(["", trending_details])
+        if x_hotspot_details:
+            lines.extend(["", x_hotspot_details])
         if summary.strip():
             lines.extend(["", summary])
         if primary_content.strip():
