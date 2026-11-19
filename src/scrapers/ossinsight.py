@@ -90,7 +90,9 @@ class OSSInsightScraper(BaseScraper):
 
         stars_gained = self._stars_int(row)
         description = (row.get("description") or "").strip()
-        primary_language = row.get("primary_language") or language
+        primary_language = (row.get("primary_language") or "").strip() or None
+        if primary_language is None and language.casefold() != "all":
+            primary_language = language
 
         title = f"{repo_name} (+{stars_gained}⭐ {self.cfg.period})"
         url = f"https://github.com/{repo_name}"
@@ -101,7 +103,7 @@ class OSSInsightScraper(BaseScraper):
             f"Forks gained: {row.get('forks', 0)}",
             f"Pushes: {row.get('pushes', 0)}",
             f"Pull requests: {row.get('pull_requests', 0)}",
-            f"Language: {primary_language}",
+            f"Language: {primary_language or 'Unknown'}",
         ]
         if description:
             content_lines.append("")

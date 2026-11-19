@@ -366,7 +366,13 @@ class DailySummarizer:
         """Format a single ContentItem into Markdown."""
         artifact = item.processing.artifacts.get(language) if item.processing else None
         analysis = item.processing.analysis if item.processing else None
+        meta = item.metadata
+        profile_id = self._profile_id(item)
         _title = title_override or (artifact.title if artifact else item.title)
+        if profile_id == "github-trending":
+            repo_name = meta.get("repo")
+            if isinstance(repo_name, str) and repo_name.strip():
+                _title = repo_name
         title = _escape_markdown(_title)
         raw_url = str(item.url)
         url = _safe_url(raw_url)
@@ -377,7 +383,6 @@ class DailySummarizer:
             if analysis and analysis.score is not None
             else "?"
         )
-        meta = item.metadata
 
         summary = analysis.summary if not artifact and analysis else ""
         primary_block = (
@@ -395,6 +400,37 @@ class DailySummarizer:
             title = _pangu(title)
             summary = _pangu(summary)
             primary_content = _pangu(primary_content)
+
+        trending_details = ""
+        if profile_id == "github-trending":
+            raw_stars = meta.get("stars_gained")
+            try:
+                stars_display = f"{int(raw_stars):,}" if raw_stars is not None else "未提供"
+            except (TypeError, ValueError):
+                stars_display = "未提供"
+            raw_language = meta.get("primary_language")
+            project_language = (
+                raw_language.strip()
+                if isinstance(raw_language, str)
+                else ""
+            )
+            if not project_language or project_language.casefold() == "all":
+                project_language = "未提供"
+            if language == "zh":
+                trending_details = (
+                    f"**GitHub 热度**：过去 24 小时新增 {stars_display} Star · "
+                    f"主要语言：{_escape_markdown(project_language)}"
+                )
+                trending_details = _pangu(trending_details)
+            else:
+                if stars_display == "未提供":
+                    stars_display = "not provided"
+                if project_language == "未提供":
+                    project_language = "not provided"
+                trending_details = (
+                    f"**GitHub trend**: {stars_display} stars gained in the past 24 hours · "
+                    f"Primary language: {_escape_markdown(project_language)}"
+                )
 
         # Source line with parts joined by " · ", link appended at end
         source_type = item.source_type.value
@@ -428,6 +464,8 @@ class DailySummarizer:
             f'<a id="{anchor_id or f"item-{index}"}"></a>',
             f"{'#' * heading_level} {title_link} \u2b50\ufe0f {score}/10",  # ⭐️
         ]
+        if trending_details:
+            lines.extend(["", trending_details])
         if summary.strip():
             lines.extend(["", summary])
         if primary_content.strip():

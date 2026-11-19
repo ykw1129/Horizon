@@ -93,7 +93,7 @@ Use three to five specific topic tags when the source supports them.
 ```markdown
 # Output
 
-Write the required `summary` block in Chinese in two to four complete sentences. Preserve the repository name exactly. Explain what the project does and who may find it useful, translating the supplied description into natural Chinese. Include the recorded stars gained during the 24-hour period and the primary programming language.
+Write the required `summary` block in Chinese in two to four complete sentences. Explain what the project does and who may find it useful, translating the supplied description into natural Chinese. The summary renderer displays the exact repository name, stars gained, language, and link from metadata; do not repeat or alter these fields in the generated description.
 
 Use only the supplied repository description and metadata. Do not use outside knowledge or infer features from the repository name. If the description is missing or too vague, say that the source provides too little information to explain the project accurately. Do not claim that star growth proves quality, safety, or long-term popularity.
 ```
@@ -152,13 +152,26 @@ Do not modify other source settings, AI settings, email settings, or schedule se
 ### Task 3: Keep the visible project order by star gain
 
 **Files:**
-- Modify: `src/ai/summarizer.py`, method `DailySummarizer.build_view`
+- Modify: `src/scrapers/ossinsight.py`, method `OSSInsightScraper._row_to_item`
+- Modify: `src/ai/summarizer.py`, methods `DailySummarizer.build_view` and `_format_item`
 
 **Interfaces:**
-- Consumes: grouped `ContentItem` lists after Horizon's score-based selection.
-- Produces: `github-trending` summary items sorted by integer `metadata["stars_gained"]` descending; other profile groups retain their existing order.
+- Consumes: OSS Insight row language and metadata plus grouped `ContentItem` lists after Horizon's score-based selection.
+- Produces: missing language is represented as unavailable rather than the `All` query bucket; `github-trending` items display exact repository name, gained stars, and language from metadata, then sort by `stars_gained` descending. Other profile groups retain their existing order.
 
-- [ ] **Step 1: Sort only the GitHub trending group before creating view items**
+- [ ] **Step 1: Keep `All` from becoming a false repository language**
+
+In `_row_to_item`, replace the language fallback with:
+
+```python
+primary_language = (row.get("primary_language") or "").strip() or None
+if primary_language is None and language.casefold() != "all":
+    primary_language = language
+```
+
+Format the input content line as `Language: {primary_language or 'Unknown'}` and preserve `None` in `metadata["primary_language"]` when the all-language response lacks a language.
+
+- [ ] **Step 2: Sort the GitHub trending group before creating view items**
 
 Inside the loop over `ordered_groups`, before enumerating `profile_items`, use:
 
@@ -173,6 +186,29 @@ if profile_id == "github-trending":
 
 Keep `global_index`, item anchors, profile ordering, and all other group ordering unchanged.
 
+- [ ] **Step 3: Render project identifiers and metrics from metadata**
+
+In `_format_item`, set `meta = item.metadata` and `profile_id = self._profile_id(item)` before building the title. For `github-trending`, use `meta["repo"]` instead of the generated title when it is a non-empty string, so the repository name stays exact. Build metric values as follows:
+
+```python
+if profile_id == "github-trending":
+    repo_name = meta.get("repo")
+    if isinstance(repo_name, str) and repo_name.strip():
+        _title = repo_name
+
+raw_stars = meta.get("stars_gained")
+try:
+    stars_display = f"{int(raw_stars):,}" if raw_stars is not None else "未提供"
+except (TypeError, ValueError):
+    stars_display = "未提供"
+raw_language = meta.get("primary_language")
+project_language = raw_language.strip() if isinstance(raw_language, str) else ""
+if not project_language or project_language.casefold() == "all":
+    project_language = "未提供"
+```
+
+Render `**GitHub 热度**：过去 24 小时新增 {stars_display} Star · 主要语言：{project_language}` in Chinese, or the equivalent English line for an English digest. Use `_escape_markdown` for the language value and insert the metric line before the generated description. Keep the repository URL as the existing linked heading. Do not render this line for other profiles.
+
 ---
 
 ### Task 4: Validate the local configuration and commit tracked files
@@ -182,6 +218,7 @@ Keep `global_index`, item anchors, profile ordering, and all other group orderin
 - Review: `profiles/github-trending/match.md`
 - Review: `profiles/github-trending/analysis.md`
 - Review: `profiles/github-trending/enrichment.md`
+- Review: `src/scrapers/ossinsight.py`
 - Review: `src/ai/summarizer.py`
 - Validate only: ignored `data/config.json`
 
@@ -210,6 +247,9 @@ assert config.sources.ossinsight.profile == "github-trending"
 assert config.sources.ossinsight.languages == ["All"]
 assert config.sources.ossinsight.max_items == 20
 assert config.sources.ossinsight.min_stars == 0
+assert config.processing.profile_settings["github-trending"].threshold is None
+assert not config.processing.profile_settings["github-trending"].topic_dedup
+assert config.digest.profile_order[0] == "github-trending"
 assert "github-trending" in profiles.ids
 print("config_and_profile_loaded=True")
 '@ | .\.venv\Scripts\python.exe -
@@ -219,10 +259,10 @@ Expected output: `config_and_profile_loaded=True`.
 
 - [ ] **Step 2: Review and commit tracked feature files only**
 
-Run `git diff --check`, then stage only `profiles/github-trending/` and `src/ai/summarizer.py`. Commit with:
+Run `git diff --check`, then stage only `profiles/github-trending/`, `src/scrapers/ossinsight.py`, and `src/ai/summarizer.py`. Commit with:
 
 ```powershell
-git add -- profiles/github-trending src/ai/summarizer.py
+git add -- profiles/github-trending src/scrapers/ossinsight.py src/ai/summarizer.py
 git commit -m "feat: add GitHub trending digest section"
 ```
 

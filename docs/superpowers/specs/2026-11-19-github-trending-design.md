@@ -16,17 +16,18 @@
 
 启用 Horizon 已有的 OSS Insight 趋势源。它从公开 API 获取 GitHub WatchEvents 的新增 Star 排名，不需要 API Key。请求使用 `past_24_hours` 和 `All` 语言，合并并按新增 Star 排序后最多保留 20 项。为满足“不设最低涨星数”，`min_stars` 设为 0。
 
-新增 `github-trending` 处理 profile，并将 OSS Insight 趋势源明确路由到该 profile。profile 只生成一个中文项目简介 block，不配置 `web_search` 或 `history_search`，避免把未核实的 README 内容补写进简介，也避免为这些项目增加外部背景查询。profile 指令要求保留仓库名，说明项目解决的问题、用途及适用对象，并从来源内容中带出新增 Star 数和主要语言；缺少项目描述时明确写出信息有限。
+新增 `github-trending` 处理 profile，并将 OSS Insight 趋势源明确路由到该 profile。profile 只生成一个中文项目简介 block，不配置 `web_search` 或 `history_search`，避免把未核实的 README 内容补写进简介，也避免为这些项目增加外部背景查询。profile 指令要求保留仓库名，说明项目解决的问题、用途及适用对象；项目名、涨 Star 数、语言和仓库链接由日报渲染器从来源元数据直接显示。语言缺失时显示“未提供”，项目描述不足时简介明确说明信息有限。
 
 该 profile 不设置分数门槛，因此 OSS Insight 返回的前 20 项不会再被普通科技新闻的 7 分门槛过滤；它也关闭主题去重，避免把前 20 个仓库合并掉。日报的 `profile_order` 把此栏目放在常规科技新闻之前；其余来源、筛选规则、邮件接收人和每日 08:00 任务保持现有设置。
 
-Horizon 的筛选和摘要层会按 AI 评分排序，因此仅靠来源排序不能保证邮件中的项目仍按涨 Star 排名。`DailySummarizer` 需要对 `github-trending` 组单独按 `stars_gained` 降序排列。该 profile 关闭主题去重，避免分析评分或相似主题合并改变榜单的前 20 个仓库。
+Horizon 的筛选和摘要层会按 AI 评分排序，因此仅靠来源排序不能保证邮件中的项目仍按涨 Star 排名。`DailySummarizer` 需要对 `github-trending` 组单独按 `stars_gained` 降序排列，并从来源元数据直接渲染仓库名、涨星数和语言，避免依赖模型准确转述这些字段。OSS Insight 以 `All` 查询时，如果 API 没有返回主要语言，抓取器应保留未知值，不得把查询桶 `All` 当作项目语言。该 profile 关闭主题去重，避免分析评分或相似主题合并改变榜单的前 20 个仓库。
 
 ## 文件与数据流
 
 - `profiles/github-trending/`: 新增 `profile.json`、匹配、分析和中文简介规则文件。
 - 忽略跟踪的 `data/config.json`: 启用 OSS Insight，设置周期、语言、最多项目数及 profile 路由；注册 profile 的日报顺序与无分数门槛设置。
-- `src/ai/summarizer.py`: 在摘要视图中保持 GitHub 热门栏目按新增 Star 排序。
+- `src/scrapers/ossinsight.py`: `All` 查询没有主要语言时保留未知值。
+- `src/ai/summarizer.py`: 在摘要视图中保持 GitHub 热门栏目按新增 Star 排序，并直接渲染准确的仓库元数据。
 - 每日运行：OSS Insight 拉取并排序 → Horizon 对仓库描述及热度指标进行分析 → 生成中文项目简介 → 写入日报并沿用既有邮件投递流程。
 
 ## 失败与边界
@@ -40,5 +41,5 @@ Horizon 的筛选和摘要层会按 AI 评分排序，因此仅靠来源排序�
 
 1. 本地配置通过 Horizon 配置模型校验，OSS Insight 在每日运行中启用，周期为过去 24 小时、语言为 All、最多 20 项、最低涨星数为 0。
 2. Horizon 能发现并加载 `github-trending` profile；热门项目被路由到该 profile，不受 `tech-news` 的 7 分门槛或主题去重影响。
-3. 日报以独立栏目展示 GitHub 项目，优先于普通科技新闻，并在栏目内继续按新增 Star 降序排列；每项包含中文用途说明、涨星数、主要语言及仓库链接。
+3. 日报以独立栏目展示 GitHub 项目，优先于普通科技新闻，并在栏目内继续按新增 Star 降序排列；每项包含中文用途说明、来源元数据中的涨星数、主要语言和仓库链接。
 4. 描述不足时输出信息有限提示，不进行无来源推断；其他栏目和邮件定时任务仍可照常运行。
