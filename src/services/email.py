@@ -63,9 +63,14 @@ if markdown is not None:
 
         def handleMatch(self, match, data):
             element, start, end = super().handleMatch(match, data)
-            if match.group(3):
+            if getattr(element, "tag", None) == self.tag:
+                code_start, code_end = self.find_code_spans(match.start(0), data)
+                if code_end is None:
+                    return element, start, end
                 code = html.unescape(
-                    _MARKDOWN_BACKSLASH_RE.sub(r"\1", match.group(3).strip())
+                    _MARKDOWN_BACKSLASH_RE.sub(
+                        r"\1", data[code_start:code_end].strip()
+                    )
                 )
                 element.text = markdown.util.AtomicString(markdown.util.code_escape(code))
             return element, start, end
