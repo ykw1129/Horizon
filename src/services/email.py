@@ -93,7 +93,7 @@ def _apply_email_inline_styles(markup: str) -> str:
         "h2": "margin:0;color:#14243a;font-size:18px;line-height:1.35;font-weight:700;overflow-wrap:anywhere;word-break:break-word",
         "h3": "margin:0 0 12px;color:#14243a;font-size:16px;line-height:1.4;font-weight:700;overflow-wrap:anywhere;word-break:break-word",
         "p": "margin:0 0 13px;color:#26354a;font-size:14px;line-height:1.7",
-        "a": "color:#087f8c;text-decoration:none",
+        "a": "color:#006f68;text-decoration:underline",
         "ul": "margin:0 0 14px;padding-left:22px;color:#26354a;font-size:14px;line-height:1.7",
         "ol": "margin:0 0 14px;padding-left:22px;color:#26354a;font-size:14px;line-height:1.7",
         "li": "margin:0 0 6px;padding-left:2px",
@@ -122,49 +122,45 @@ def _apply_email_inline_styles(markup: str) -> str:
 
 
 def _layout_email_blocks(markup: str) -> str:
-    """Wrap summary sections and item blocks in email-safe presentation tables."""
-    # Keep each divider as its own token so following text and headings remain
-    # in the message instead of being swallowed with the <hr> block.
-    parts = re.split(
-        r"(<hr\b[^>]*>|(?=<h[23]\b))", markup, flags=re.IGNORECASE
-    )
+    """Lay out article cards in two columns, wrapping on narrow screens."""
+    parts = re.split(r"(?=<h[23]\b)|(<hr\b[^>]*>)", markup, flags=re.IGNORECASE)
     output = []
-    item_open = False
+    cards = []
 
-    def close_item():
-        nonlocal item_open
-        if item_open:
-            output.append("</td></tr></table>")
-            item_open = False
+    def flush_cards():
+        if not cards:
+            return
+        output.append('<div style="font-size:0;text-align:left">')
+        for card in cards:
+            output.append(
+                '<div style="display:inline-block;vertical-align:top;width:100%;max-width:400px;'
+                'font-size:15px;text-align:left"><table role="presentation" width="100%" '
+                'cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 8px 16px">'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                'style="background:#ffffff;border:1px solid #dfe5e7;border-top:3px solid #118579">'
+                '<tr><td style="padding:20px;overflow-wrap:anywhere;word-break:break-word">'
+                + _apply_email_inline_styles(card)
+                + '</td></tr></table></td></tr></table></div>'
+            )
+        output.append('</div>')
+        cards.clear()
 
     for part in parts:
-        if not part:
+        if not part or not part.strip():
             continue
-        if re.match(r"<hr\b", part, re.IGNORECASE):
-            close_item()
-            output.append(
-                '<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>'
-            )
-        elif re.match(r"<h2\b", part, re.IGNORECASE):
-            close_item()
-            output.append(
-                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:22px 0 12px;border-bottom:1px solid #dce5ec">'
-                '<tr><td style="padding:0 0 9px;border-left:4px solid #36a7a0;padding-left:11px">'
-                + _apply_email_inline_styles(part)
-                + "</td></tr></table>"
-            )
-        elif re.match(r"<h3\b", part, re.IGNORECASE):
-            close_item()
-            output.append(
-                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 13px;background:#ffffff;border:1px solid #e2e9ef;border-radius:8px">'
-                '<tr><td style="padding:16px 18px;overflow-wrap:anywhere;word-break:break-word">'
-            )
-            output.append(_apply_email_inline_styles(part))
-            item_open = True
+        if re.match(r"<h3\b", part, re.IGNORECASE):
+            cards.append(part)
+        elif re.match(r"<hr\b", part, re.IGNORECASE):
+            # Dividers between articles do not interrupt the two-column flow.
+            continue
         else:
-            output.append(_apply_email_inline_styles(part))
-
-    close_item()
+            flush_cards()
+            if re.match(r"<h2\b", part, re.IGNORECASE):
+                output.append('<div style="margin:28px 8px 16px;padding:0 0 10px;border-bottom:2px solid #192b32">'
+                              + _apply_email_inline_styles(part) + '</div>')
+            else:
+                output.append(_apply_email_inline_styles(part))
+    flush_cards()
     return "".join(output)
 
 
@@ -191,7 +187,7 @@ def _render_email_document(
 <body style="margin:0;padding:0;background:#f1f4f7;color:#26354a;font-family:Arial,'Microsoft YaHei',sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f4f7" style="width:100%;background:#f1f4f7">
 <tr><td align="center" style="padding:24px 12px">
-<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;border-collapse:separate;border-spacing:0">
+<table role="presentation" width="840" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:840px;border-collapse:separate;border-spacing:0">
 <tr><td bgcolor="#14243a" style="padding:20px 24px;background:#14243a;border-top:4px solid #36a7a0;border-radius:10px 10px 0 0">
 <div style="color:#ffffff;font-size:13px;letter-spacing:1.5px;font-weight:700">HORIZON · DAILY BRIEFING</div>
 </td></tr>
@@ -373,21 +369,13 @@ class EmailManager:
         cleaned_summary = _LOCAL_SUMMARY_LINK_RE.sub(r"\1", cleaned_summary)
         try:
             safe_summary = _prepare_email_markdown(cleaned_summary)
-            rendered_summary = (
-                _render_email_markdown(safe_summary)
-                if markdown
-                else f"<pre>{html.escape(cleaned_summary)}</pre>"
-            )
+            if markdown is None:
+                raise RuntimeError("Markdown dependency is missing; install the project dependencies")
+            rendered_summary = _render_email_markdown(safe_summary)
             email_content = _layout_email_blocks(rendered_summary)
         except Exception as exc:
-            logger.warning(
-                "Could not render HTML summary; using escaped text fallback: %s",
-                exc,
-            )
-            email_content = (
-                f'<pre style="margin:0;white-space:pre-wrap;font:14px/1.7 Arial,sans-serif">'
-                f"{html.escape(cleaned_summary)}</pre>"
-            )
+            logger.error("Could not render HTML summary; email was not sent: %s", exc)
+            return
 
         html_body = _render_email_document(
             email_content,
